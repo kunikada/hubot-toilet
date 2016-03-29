@@ -25,6 +25,13 @@
 
 mqtt = require 'mqtt'
 
+class Time
+  @now: ->
+    Date.now() / 1000 | 0
+
+  @untilNow: (from) ->
+    @now() - from
+
 class EspHelper
   wait: []
 
@@ -33,59 +40,44 @@ class EspHelper
     @mqtt = new MqttHelper mac
 
   isDead: ->
-    now = Date.now() / 1000 | 0
-    sleepmin = @mqtt.get('sleepmin_oncheck') or 10
-    resetTime = parseInt @mqtt.get('resetTime'), 10
-    now > resetTime + sleepmin * 60 * 2
+    Time.untilNow @mqtt.get('resetTime') > 24 * 60 * 60
 
   isEmpty: ->
     @mqtt.get('status') is '2'
 
   isntEmpty: -> not @isEmpty()
 
+  isLeftLighting: ->
+    @isntEmpty() and Time.untilNow @mqtt.get('resultTime') > 15 * 60
+
   isntWaiting: ->
     @wait.length is 0
 
   pushWait: (envelope) ->
-    for human in @wait
-      if human.envelope.room is envelope.room and
-        human.envelope.user is envelope.user
-          return
+    for record, i in @wait
+      if record.room is envelope.room and
+        record.user is envelope.user
+          return i + 1
 
-    now = Date.now() / 1000 | 0
-    human =
-      envelope: envelope
-      createTime: now
-    @wait.push human
-
-  countWait: ->
+    @wait.push envelope
     @wait.length
-
-  calcWaitMinutes: ->
-    waitTime = @mqtt.waitTime
-    sum = 0
-    for time in waitTime
-      sum += time
-    Math.floor sum / waitTime.length / 60
 
   listen: (robot) ->
     interval = process.env.HUBOT_CHATWORK_INTERVAL_SEC or 5
     setInterval =>
       return if @isntWaiting() or @isntEmpty()
 
-      now = Date.now() / 1000 | 0
-      human = @wait[0]
-      if human.noticeTime? 
-        @wait.shift() if now - human.noticeTime > @calcWaitMinutes() * 60 
-        return
+      for envelope in @wait
+        message = '空きました!'
+        if @wait.length > 1
+          message += "\nけど、他にも待っていた人がいたようです。"
+        robot.reply envelope, message
 
-      human.noticeTime = now
-      robot.reply human.envelope, '空きました！'
+      @wait = []
     , interval * 1000    
 
 class MqttHelper
   data: []
-  waitTime: [300]
 
   constructor: (@mac) ->
     auth = process.env.HUBOT_MQTT_AUTH.split ':'
@@ -99,14 +91,7 @@ class MqttHelper
     @client.subscribe "#{@mac}/#"
 
     @client.on 'message', (topic, payload) =>
-      message = payload.toString()
-      if topic is "#{@mac}/result" and
-        @get('status') is '1' and
-          message.split(' ')[1] is '2'
-            @waitTime.unshift (message.split(' ')[0] - @get('resultTime'))
-            @waitTime = @waitTime.slice 0, 9
-
-      @data[topic] = message
+      @data[topic] = payload.toString()
 
   get: (param) ->
     @data["#{@mac}/result"] ?= ''
@@ -135,14 +120,19 @@ module.exports = (robot) ->
       res.reply "へんじがない。\nただのしかばねのようだ。"
       return
 
-    if espHelper.isntWaiting() and espHelper.isEmpty()
+    if espHelper.isLeftLighting()
+      res.reply 'もしかして: 電気の消し忘れ'
+      return
+
+    if espHelper.isEmpty()
       res.reply '安心してください、空いてますよ！'
       return
 
-    espHelper.pushWait res.envelope
-    num = espHelper.countWait()
-    min = espHelper.calcWaitMinutes() * num
-    res.reply "只今の待ち時間は#{min}分です。\n現在あなたを含めて#{num}人待っています。"
+    num = espHelper.pushWait res.envelope
+    message = '入ってます。'
+    if num > 1
+      message += "\nあなたで#{num}人目ですよ。"
+    res.reply message
 
   robot.respond /(get|set)\s+(\S+)\s*(\S*)/i, (res) ->
     method = res.match[1]
