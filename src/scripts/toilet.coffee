@@ -40,7 +40,7 @@ class EspHelper
     @mqtt = new MqttHelper mac
 
   isDead: ->
-    Time.untilNow @mqtt.get('resetTime') > 24 * 60 * 60
+    Time.untilNow(@mqtt.get 'resetTime') > 24 * 60 * 60
 
   isEmpty: ->
     @mqtt.get('status') is '2'
@@ -48,7 +48,7 @@ class EspHelper
   isntEmpty: -> not @isEmpty()
 
   isLeftLighting: ->
-    @isntEmpty() and Time.untilNow @mqtt.get('resultTime') > 15 * 60
+    @isntEmpty() and Time.untilNow(@mqtt.get 'resultTime') > 15 * 60
 
   isntWaiting: ->
     @wait.length is 0
